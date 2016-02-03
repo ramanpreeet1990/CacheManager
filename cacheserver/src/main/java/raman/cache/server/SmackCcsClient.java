@@ -1,0 +1,541 @@
+package raman.cache.server;
+
+import com.j256.ormlite.dao.Dao;
+import com.j256.ormlite.dao.DaoManager;
+import com.j256.ormlite.jdbc.JdbcConnectionSource;
+import com.j256.ormlite.support.ConnectionSource;
+import com.j256.ormlite.table.TableUtils;
+
+import org.jivesoftware.smack.ConnectionConfiguration;
+import org.jivesoftware.smack.ConnectionConfiguration.SecurityMode;
+import org.jivesoftware.smack.ConnectionListener;
+import org.jivesoftware.smack.PacketInterceptor;
+import org.jivesoftware.smack.PacketListener;
+import org.jivesoftware.smack.XMPPConnection;
+import org.jivesoftware.smack.XMPPException;
+import org.jivesoftware.smack.filter.PacketTypeFilter;
+import org.jivesoftware.smack.packet.DefaultPacketExtension;
+import org.jivesoftware.smack.packet.Message;
+import org.jivesoftware.smack.packet.Packet;
+import org.jivesoftware.smack.packet.PacketExtension;
+import org.jivesoftware.smack.provider.PacketExtensionProvider;
+import org.jivesoftware.smack.provider.ProviderManager;
+import org.jivesoftware.smack.util.StringUtils;
+import org.json.simple.JSONValue;
+import org.json.simple.parser.ParseException;
+import org.xmlpull.v1.XmlPullParser;
+
+import java.sql.SQLException;
+import java.util.HashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.logging.Level;
+import java.util.logging.Logger;
+
+import javax.net.ssl.SSLSocketFactory;
+
+
+/**
+ * **************************************************************************************************************************
+ * Developer : Ramanpreet Singh Khinda
+ * <p/>
+ * GCM Server which is implemented using XMPP and Smack library
+ * and provides a simple UI for sent and received messages from Local GCM Server to Google GCM Server and vice verca
+ * <p/>
+ * <p/>
+ * SmackCcsClient : This class is responsible for handling all the XMPP Server functionality
+ ***************************************************************************************************************************/
+public class SmackCcsClient {
+
+    Logger logger = Logger.getLogger("SmackCcsClient");
+
+    static Random random = new Random();
+    XMPPConnection connection;
+    ConnectionConfiguration config;
+
+    private static Dao<User, String> userDao;
+    private static LockCache lockCache;
+
+    /**
+     * XMPP Packet Extension for GCM Cloud Connection Server.
+     */
+    class GcmPacketExtension extends DefaultPacketExtension {
+        String json;
+
+        public GcmPacketExtension(String json) {
+            super(Globals.GCM_ELEMENT_NAME, Globals.GCM_NAMESPACE);
+            this.json = json;
+        }
+
+        public String getJson() {
+            return json;
+        }
+
+        @Override
+        public String toXML() {
+            return String.format("<%s xmlns=\"%s\">%s</%s>", Globals.GCM_ELEMENT_NAME, Globals.GCM_NAMESPACE, json,
+                    Globals.GCM_ELEMENT_NAME);
+        }
+
+        public Packet toPacket() {
+            return new Message() {
+                // Must override toXML() because it includes a <body>
+                @Override
+                public String toXML() {
+
+                    StringBuilder buf = new StringBuilder();
+                    buf.append("<message");
+                    if (getXmlns() != null) {
+                        buf.append(" xmlns=\"").append(getXmlns()).append("\"");
+                    }
+
+                    if (getLanguage() != null) {
+                        buf.append(" xml:lang=\"").append(getLanguage()).append("\"");
+                    }
+
+                    if (getPacketID() != null) {
+                        buf.append(" id=\"").append(getPacketID()).append("\"");
+                    }
+
+                    if (getTo() != null) {
+                        buf.append(" to=\"").append(StringUtils.escapeForXML(getTo())).append("\"");
+                    }
+
+                    if (getFrom() != null) {
+                        buf.append(" from=\"").append(StringUtils.escapeForXML(getFrom())).append("\"");
+                    }
+
+                    buf.append(">");
+                    buf.append(GcmPacketExtension.this.toXML());
+                    buf.append("</message>");
+
+                    return buf.toString();
+                }
+            };
+        }
+    }
+
+    public SmackCcsClient() {
+        // Add GcmPacketExtension
+        ProviderManager.getInstance().addExtensionProvider(Globals.GCM_ELEMENT_NAME, Globals.GCM_NAMESPACE,
+                new PacketExtensionProvider() {
+
+                    @Override
+                    public PacketExtension parseExtension(XmlPullParser parser) throws Exception {
+                        String json = parser.nextText();
+                        GcmPacketExtension packet = new GcmPacketExtension(json);
+                        return packet;
+                    }
+                });
+    }
+
+    /**
+     * Returns a random message id to uniquely identify a message.
+     * <p/>
+     * <p/>
+     * Note: This is generated by a pseudo random number generator for
+     * illustration purpose, and is not guaranteed to be unique.
+     */
+    public String getRandomMessageId() {
+        return "m-" + Long.toString(random.nextLong());
+    }
+
+    /**
+     * Sends a downstream GCM message.
+     */
+    public void send(String jsonRequest) {
+        Packet request = new GcmPacketExtension(jsonRequest).toPacket();
+        connection.sendPacket(request);
+    }
+
+    /**
+     * Handles an upstream data message from a device application.
+     * <p/>
+     * <p/>
+     * This sample echo server sends an echo message back to the device.
+     * Subclasses should override this method to process an upstream message.
+     */
+    public void handleIncomingDataMessage(Map<String, Object> jsonObject) {
+        @SuppressWarnings("unchecked")
+        Map<String, String> payload = (Map<String, String>) jsonObject.get("data");
+
+        String from = jsonObject.get("from").toString();
+        //String deviceRegId = payload.get("reg_id").toString();
+
+        // PackageName of the application that sent this message.
+        String category = jsonObject.get("category").toString();
+        logger.log(Level.INFO, "Application: " + category);
+
+        String action = payload.get(Globals.EXTRA_ACTION);
+
+        if (action.equalsIgnoreCase(Globals.ACTION_REGISTER)) {
+            try {
+                String newUserDeviceImei = payload.get(Globals.EXTRA_USER_DEVICE_IMEI);
+                String newUserGcmRegId = payload.get(Globals.EXTRA_GCM_REG_ID);
+
+                Boolean isAlreadyRegistered = false;
+
+                List<User> users = userDao.queryForEq("device_imei", newUserDeviceImei);
+                lockCache = LockCache.getInstance();
+
+                payload.put(Globals.EXTRA_DATA, lockCache.getCacheData());
+
+                if (null != users && users.size() > 0) {
+                    for (User user : users) {
+                        if (user.getDeviceImei().equalsIgnoreCase(newUserDeviceImei)) {
+                            isAlreadyRegistered = true;
+
+                            if (user.getGcmRegId().equals(from)) {
+                                payload.put(Globals.EXTRA_MESSAGE, "User with Device imei : " + newUserDeviceImei + " is already registered with Raman Cache Server");
+                                String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                                send(echo);
+                                logger.info("User with Device imei : " + newUserDeviceImei + " is already registered with Raman Cache Server : " + from);
+
+                            } else {
+                                //GCM Id of user got changed because the user uninstalled the app. Update the same in DB
+                                updateUser(user, from);
+                                payload.put(Globals.EXTRA_MESSAGE, "User with Device imei : " + newUserDeviceImei + " has been registered with Raman Cache Server Successfully");
+                                String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                                send(echo);
+                                logger.info("User with Device imei : " + newUserDeviceImei + " has been registered with Raman Cache Server Successfully : " + from);
+
+                            }
+                        }
+                    }
+                }
+
+                if (isAlreadyRegistered == false && addUser(newUserDeviceImei, from)) {
+                    payload.put(Globals.EXTRA_MESSAGE, "User with Device imei : " + newUserDeviceImei + " has been registered with Raman Cache Server Successfully");
+                    String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                    send(echo);
+                    logger.info("User with Device imei : " + newUserDeviceImei + " has been registered with Raman Cache Server Successfully : " + from);
+
+                } else if (isAlreadyRegistered == false) {
+                    payload.put(Globals.EXTRA_MESSAGE, "SORRY... User with Device imei : " + newUserDeviceImei + " could not be registered with Raman Cache Server");
+                    String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                    send(echo);
+                    logger.info("SORRY... User with Device imei : " + newUserDeviceImei + " could not be registered with Raman Cache Server : " + from);
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        } else if (action.equalsIgnoreCase(Globals.ACTION_REQUEST_GLOBAL_LOCK)) {
+            String userDeviceImei = payload.get(Globals.EXTRA_USER_DEVICE_IMEI);
+            logger.info("User with Device imei : " + userDeviceImei + " have requested for Global Cache Lock");
+
+            lockCache = LockCache.getInstance();
+
+            if (!lockCache.isDataLocked()) {
+                try {
+                    lockCache.lock();
+                    payload.put(Globals.EXTRA_MESSAGE, Globals.GLOBAL_LOCK_ACQUIRED);
+                    String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                    send(echo);
+
+                    broadcastMessage(Globals.ACTION_GLOBAL_LOCK_ACQUIRED, payload, userDeviceImei);
+                } catch (InterruptedException e) {
+                    e.printStackTrace();
+                }
+            } else {
+                logger.info("Global Cache Lock is already acquired");
+                payload.put(Globals.EXTRA_MESSAGE, Globals.ERROR_ACQUIRING_GLOBAL_LOCK);
+                String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                send(echo);
+            }
+
+        } else if (action.equalsIgnoreCase(Globals.ACTION_WRITE_DATA)) {
+            String userDeviceImei = payload.get(Globals.EXTRA_USER_DEVICE_IMEI);
+            String data = payload.get(Globals.EXTRA_DATA);
+
+            logger.info("User with Device imei : " + userDeviceImei + " have new data to write");
+
+            lockCache = LockCache.getInstance();
+
+            try {
+                if (!lockCache.isDataLocked())
+                    lockCache.lock();
+
+                payload.put(Globals.EXTRA_MESSAGE, "Success");
+                String echo = createJsonMessage(from, getRandomMessageId(), payload, null, null, false);
+                send(echo);
+
+            } catch (InterruptedException e) {
+                e.printStackTrace();
+            } finally {
+                lockCache.unlock();
+                broadcastMessage(Globals.ACTION_NEW_DATA_AVAILABLE, payload, userDeviceImei);
+            }
+
+
+        } else {
+            logger.warning("Unknown action sent: " + action);
+        }
+    }
+
+    /**
+     * Send GCM message to all registered devices
+     *
+     * @param payload message data
+     */
+    public void broadcastMessage(String action, Map<String, String> payload, String userDeviceImei) {
+        try {
+            payload.put(Globals.EXTRA_ACTION, action);
+
+            List<User> users = userDao.queryForAll();
+
+            for (User user : users) {
+                if (!user.getDeviceImei().contains(userDeviceImei)) {
+                    String broadcast = createJsonMessage(
+                            user.getGcmRegId(), getRandomMessageId(), payload, null, null, false);
+                    send(broadcast);
+                }
+
+            }
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+    /**
+     * Handles an ACK.
+     * <p/>
+     * <p/>
+     * By default, it only logs a INFO message, but subclasses could override it
+     * to properly handle ACKS.
+     */
+    public void handleAckReceipt(Map<String, Object> jsonObject) {
+        String messageId = jsonObject.get("message_id").toString();
+        String from = jsonObject.get("from").toString();
+        logger.log(Level.INFO, "handleAckReceipt() from: " + from + ", messageId: " + messageId);
+    }
+
+    /**
+     * Handles a NACK.
+     * <p/>
+     * <p/>
+     * By default, it only logs a INFO message, but subclasses could override it
+     * to properly handle NACKS.
+     */
+    public void handleNackReceipt(Map<String, Object> jsonObject) {
+        String messageId = jsonObject.get("message_id").toString();
+        String from = jsonObject.get("from").toString();
+        logger.log(Level.INFO, "handleNackReceipt() from: " + from + ", messageId: " + messageId);
+    }
+
+    /**
+     * Creates a JSON encoded GCM message.
+     *
+     * @param to             RegistrationId of the target device (Required).
+     * @param messageId      Unique messageId for which CCS will send an "ack/nack"
+     *                       (Required).
+     * @param payload        Message content intended for the application. (Optional).
+     * @param collapseKey    GCM collapse_key parameter (Optional).
+     * @param timeToLive     GCM time_to_live parameter (Optional).
+     * @param delayWhileIdle GCM delay_while_idle parameter (Optional).
+     * @return JSON encoded GCM message.
+     */
+    public static String createJsonMessage(String to, String messageId, Map<String, String> payload,
+                                           String collapseKey, Long timeToLive, Boolean delayWhileIdle) {
+        Map<String, Object> message = new HashMap<String, Object>();
+        message.put("to", to);
+        if (collapseKey != null) {
+            message.put("collapse_key", collapseKey);
+        }
+
+        if (timeToLive != null) {
+            message.put("time_to_live", timeToLive);
+        }
+
+        if (delayWhileIdle != null && delayWhileIdle) {
+            message.put("delay_while_idle", true);
+        }
+
+        message.put("message_id", messageId);
+        message.put("data", payload);
+        return JSONValue.toJSONString(message);
+    }
+
+    /**
+     * Creates a JSON encoded ACK message for an upstream message received from
+     * an application.
+     *
+     * @param to        RegistrationId of the device who sent the upstream message.
+     * @param messageId messageId of the upstream message to be acknowledged to CCS.
+     * @return JSON encoded ack.
+     */
+    public static String createJsonAck(String to, String messageId) {
+        Map<String, Object> message = new HashMap<String, Object>();
+        message.put("message_type", "ack");
+        message.put("to", to);
+        message.put("message_id", messageId);
+        return JSONValue.toJSONString(message);
+    }
+
+    /**
+     * Connects to GCM Cloud Connection Server using the supplied credentials.
+     *
+     * @param username GCM_SENDER_ID@gcm.googleapis.com
+     * @param password API Key
+     * @throws XMPPException
+     */
+    public void connect(String username, String password) throws XMPPException {
+        config = new ConnectionConfiguration(Globals.GCM_SERVER, Globals.GCM_PORT);
+        config.setSecurityMode(SecurityMode.enabled);
+        config.setReconnectionAllowed(true);
+        config.setRosterLoadedAtLogin(false);
+        config.setSendPresence(false);
+        config.setSocketFactory(SSLSocketFactory.getDefault());
+
+        // NOTE: Set to true to launch a window with information about packets
+        // sent and received
+        config.setDebuggerEnabled(true);
+
+        // -Dsmack.debugEnabled=true
+        XMPPConnection.DEBUG_ENABLED = true;
+
+        connection = new XMPPConnection(config);
+        connection.connect();
+
+        connection.addConnectionListener(new ConnectionListener() {
+
+            @Override
+            public void reconnectionSuccessful() {
+                logger.info("Reconnecting..");
+            }
+
+            @Override
+            public void reconnectionFailed(Exception e) {
+                logger.log(Level.INFO, "Reconnection failed.. ", e);
+            }
+
+            @Override
+            public void reconnectingIn(int seconds) {
+                logger.log(Level.INFO, "Reconnecting in %d secs", seconds);
+            }
+
+            @Override
+            public void connectionClosedOnError(Exception e) {
+                logger.log(Level.INFO, "Connection closed on error.");
+            }
+
+            @Override
+            public void connectionClosed() {
+                logger.info("Connection closed.");
+            }
+        });
+
+        // Handle incoming packets
+        connection.addPacketListener(new PacketListener() {
+
+            @Override
+            public void processPacket(Packet packet) {
+                logger.log(Level.INFO, "Received: " + packet.toXML());
+                Message incomingMessage = (Message) packet;
+                GcmPacketExtension gcmPacket = (GcmPacketExtension) incomingMessage.getExtension(Globals.GCM_NAMESPACE);
+                String json = gcmPacket.getJson();
+
+                try {
+                    @SuppressWarnings("unchecked")
+                    Map<String, Object> jsonObject = (Map<String, Object>) JSONValue.parseWithException(json);
+
+                    // present for "ack"/"nack", null otherwise
+                    Object messageType = jsonObject.get("message_type");
+
+                    if (messageType == null) {
+                        // Normal upstream data message
+                        handleIncomingDataMessage(jsonObject);
+
+                        // Send ACK to CCS
+                        String messageId = jsonObject.get("message_id").toString();
+                        String from = jsonObject.get("from").toString();
+                        String ack = createJsonAck(from, messageId);
+                        send(ack);
+                    } else if ("ack".equals(messageType.toString())) {
+                        // Process Ack
+                        handleAckReceipt(jsonObject);
+                    } else if ("nack".equals(messageType.toString())) {
+                        // Process Nack
+                        handleNackReceipt(jsonObject);
+                    } else {
+                        logger.log(Level.WARNING, "Unrecognized message type (%s)", messageType.toString());
+                    }
+                } catch (ParseException e) {
+                    logger.log(Level.SEVERE, "Error parsing JSON " + json, e);
+                } catch (Exception e) {
+                    logger.log(Level.SEVERE, "Couldn't send echo.", e);
+                }
+            }
+        }, new PacketTypeFilter(Message.class));
+
+        // Log all outgoing packets
+        connection.addPacketInterceptor(new PacketInterceptor() {
+            @Override
+            public void interceptPacket(Packet packet) {
+                logger.log(Level.INFO, "Sent: {0}", packet.toXML());
+            }
+        }, new PacketTypeFilter(Message.class));
+
+        connection.login(username, password);
+    }
+
+    /**
+     * @param user
+     * @param newGcmRegId
+     */
+    public void updateUser(User user, String newGcmRegId) {
+        try {
+            user.setGcmRegId(newGcmRegId);
+            userDao.update(user);
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+
+    /**
+     * @param userDeviceImei
+     * @param gcmRegId
+     */
+    public boolean addUser(String userDeviceImei, String gcmRegId) {
+        boolean userAdded = false;
+        try {
+            userDao.createIfNotExists(new User(userDeviceImei, gcmRegId));
+            userAdded = true;
+        } catch (SQLException e) {
+            userAdded = false;
+            e.printStackTrace();
+        }
+
+        return userAdded;
+    }
+
+    public static void main(String[] args) {
+        final String userName = Globals.GCM_SENDER_ID + "@gcm.googleapis.com";
+        final String password = Globals.GCM_SERVER_KEY;
+        SmackCcsClient ccsClient = new SmackCcsClient();
+
+        String currentWorkingDirectory = System.getProperty("user.dir");
+        System.out.print("Storing Database in current Directory : " + currentWorkingDirectory);
+
+        String databaseURL = "jdbc:sqlite:" + currentWorkingDirectory + "/Raman_Cache_Server_DB.db";
+
+        try {
+            // Setup CCS client and create local SQLite database and tables if needed
+            ccsClient.connect(userName, password);
+            ConnectionSource connectionSource = new JdbcConnectionSource(databaseURL);
+
+            lockCache = LockCache.getInstance();
+            lockCache.setCacheData("Hi all. This is the initial Sample Cache data by Ramanpreet. Enjoy the Cache Service.");
+
+            userDao = DaoManager.createDao(connectionSource, User.class);
+            TableUtils.createTableIfNotExists(connectionSource, User.class);
+
+        } catch (XMPPException e) {
+            e.printStackTrace();
+        } catch (SQLException e) {
+            e.printStackTrace();
+        }
+    }
+
+}
