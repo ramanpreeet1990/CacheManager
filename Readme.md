@@ -1,17 +1,17 @@
 # <p align="center">Cache Manager<br/>Client & Server Cache Manager Service App</p>
 
-This app has 2 Components :-
-1. CacheManager
-Its a Client app which can be installed on any Android device (API 19 to 22). It uses services of CacheServer to share a Global data file stored on Server.
+This app has 2 Components :-<br />
+1. CacheManager<br />
+Its a Client app which can be installed on any Android device (API 19 to 22). It uses services of CacheServer to share a Global data file stored on Server.<br />
 
-2. CacheServer
-Its a backend server responsible for managing the Global Cache and giving access of Lock to the devices based on FCFS.
+2. CacheServer<br />
+Its a backend server responsible for managing the Global Cache and giving access of Lock to the devices based on FCFS.<br />
 
 
 #### Credits
 This application uses Open Source components. You can find the source code and References below. I acknowledge and grateful for their contributions to open source.
 
-References :-
+References :-<br />
 http://tutorials.jenkov.com/java-concurrency/locks.html<br />
 https://developers.google.com/cloud-messaging/<br />
 https://www.quora.com/How-do-I-properly-credit-an-original-codes-developer-for-her-open-source-contribution<br />
