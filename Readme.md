@@ -13,11 +13,11 @@ Guidelines for the design
 
 This Project has 2 Components :-<br />
 ---------
-1. CacheManager<br />
+**1. CacheManager**<br />
 Its a Client app which can be installed on any Android device (API 19 to 22). It uses services of CacheServer to share a Global data file stored on Server.
 
 
-2. CacheServer<br />
+**2. CacheServer**<br />
 Its a backend server responsible for managing the Global Cache and giving access of Lock to the devices based on FCFS.
 
 
