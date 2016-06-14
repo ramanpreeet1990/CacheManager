@@ -25,7 +25,7 @@ import suny.buffalo.cse.cache.utility.Globals;
 import suny.buffalo.cse.cache.utility.Utility;
 
 /*
-* * Comment on my files : Testing a new
+* * Comment on my files : Testing a new feature
 * */
 public class MainActivity extends AppCompatActivity implements View.OnClickListener {
     private Session sessionObject;
