@@ -7,7 +7,7 @@ package raman.cache.server;
  * This class contains all the Global fields
  ***************************************************************************************************************************/
 public class Globals {
-    public static final String TAG = "Raman_Cache_Server";
+    public static final String TAG =  "Raman_Cache_Server";
 
     public static final String GCM_SENDER_ID =  "67907436896";
     public static final String GCM_SERVER = "gcm.googleapis.com";
