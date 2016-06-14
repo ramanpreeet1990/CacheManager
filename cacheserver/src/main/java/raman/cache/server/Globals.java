@@ -4,10 +4,10 @@ package raman.cache.server;
  * **************************************************************************************************************************
  * Developer : Ramanpreet Singh Khinda
  * <p/>
- * This class contains all the Global fields
+ * This class contains all the Global fields and .
  ***************************************************************************************************************************/
 public class Globals {
-    public static final String TAG = "Raman_Cache_Server";
+    public static final String TAG =  "Raman_Cache_Server";
 
     public static final String GCM_SENDER_ID =  "67907436896";
     public static final String GCM_SERVER = "gcm.googleapis.com";
