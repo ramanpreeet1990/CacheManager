@@ -2,7 +2,7 @@ package raman.cache.server;
 
 /**
  * **************************************************************************************************************************
- * Developer : Ramanpreet Singh Khinda   
+ * Developer : Ramanpreet Singh Khinda
  * <p/>
  * This class contains all the Global fields
  ***************************************************************************************************************************/
@@ -12,7 +12,7 @@ public class Globals {
     public static final String GCM_SENDER_ID =  "67907436896";
     public static final String GCM_SERVER = "gcm.googleapis.com";
     public static final String GCM_SERVER_KEY = "AIzaSyBxKmFutsp-bs7TjBe2pRseKyXJuMmGi6E";
-    public static final String GCM_ELEMENT_NAME = "gcm";
+    public static final String GCM_ELEMENT_NAME  = "gcm";
     public static final String GCM_NAMESPACE = "google:mobile:data";
 
     public static final int GCM_PORT = 5235;
