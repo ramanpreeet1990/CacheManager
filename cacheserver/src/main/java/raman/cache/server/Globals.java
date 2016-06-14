@@ -3,13 +3,13 @@ package raman.cache.server;
 /**
  * **************************************************************************************************************************
  * Developer : Ramanpreet Singh Khinda
- * <p/> 
+ * <p/>
  * This class contains all the Global fields
  ***************************************************************************************************************************/
 public class Globals {
     public static final String TAG = "Raman_Cache_Server";
 
-    public static final String GCM_SENDER_ID = "67907436896";
+    public static final String GCM_SENDER_ID =  "67907436896";
     public static final String GCM_SERVER = "gcm.googleapis.com";
     public static final String GCM_SERVER_KEY = "AIzaSyBxKmFutsp-bs7TjBe2pRseKyXJuMmGi6E";
     public static final String GCM_ELEMENT_NAME = "gcm";
